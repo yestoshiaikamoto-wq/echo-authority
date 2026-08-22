@@ -1,0 +1,7 @@
+# Build artifacts — never commit these.
+# The wasm32 build output lives here and is fully reproducible from source.
+/target
+
+# Editor / OS noise
+.DS_Store
+*.swp

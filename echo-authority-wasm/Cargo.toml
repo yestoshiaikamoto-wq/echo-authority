@@ -1,0 +1,33 @@
+[package]
+name = "echo-authority-wasm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "The Echo Authority Protocol Border Control verifier, compiled to WebAssembly. Same code as echo-authority-core."
+license = "MIT OR Apache-2.0"
+authors = ["Money Musk <echo@moneymusk.space>"]
+repository = "https://github.com/yestoshiaikamoto-wq/echo-authority"
+homepage = "https://moneymusk.space/protocol"
+readme = "README.md"
+keywords = ["authority", "authorization", "webassembly", "wasm", "ed25519"]
+categories = ["authentication", "cryptography", "wasm"]
+exclude = ["target/"]
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+# path for local builds; version so crates.io can resolve the published core crate.
+echo-authority-core = { path = "../echo-authority-rust", version = "0.1.0" }
+# Border Control only VERIFIES; it never draws randomness. But ed25519-dalek pulls getrandom
+# into the graph and wasm32-unknown-unknown has no default entropy source, so we enable the
+# custom backend and register a never-called stub (see src/lib.rs).
+getrandom = { version = "0.2", features = ["custom"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true
