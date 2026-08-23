@@ -24,8 +24,7 @@ so the identical verifier runs in the browser on `/protocol` — two independent
 ## Run it
 
 ```sh
-cargo test          # run the full conformance suite (22 vectors)
-cargo build --release
+cargo test          # 18 conformance vectors + 4 attenuation tests = 22 passing
 echo '{ "authority": {...}, "invocation": {...}, "state": {...} }' | ./target/release/echo-border-control
 ```
 
