@@ -1,0 +1,39 @@
+name: Publish to crates.io
+
+# Run this by hand from the Actions tab. Publishing is irreversible, so it is
+# never automatic.
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # The gate: no green vectors, no publish. 18 conformance vectors plus 4
+      # attenuation tests, so cargo reports 22 passing. If any one of them
+      # disagrees with the spec, this job stops here and nothing is published.
+      - name: Run the conformance suite
+        run: cargo test --manifest-path echo-authority-rust/Cargo.toml
+
+      # Order matters. echo-authority-wasm depends on echo-authority-core by
+      # version, so core has to exist in the registry first.
+      - name: Publish echo-authority-core
+        run: cargo publish --manifest-path echo-authority-rust/Cargo.toml
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for the registry index to catch up
+        run: sleep 45
+
+      # Verified against wasm32: the crate is a cdylib for the browser, so a
+      # host-target build check would not represent how it is actually used.
+      - name: Publish echo-authority-wasm
+        run: cargo publish --manifest-path echo-authority-wasm/Cargo.toml --target wasm32-unknown-unknown
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
