@@ -10,27 +10,43 @@
 //!   invoke     --seed <hex>      -> a signed Invocation                      (stdin: invocation fields JSON)
 //!   verify                       -> {"decision","reason","receipt"} exit 0/1 (stdin: {authority,invocation,state})
 //!   attenuate                    -> {"ok","violations"}          exit 0/1    (stdin: {child,parent})
+//!   sign-receipt --seed <hex> --gateway <id>                    (stdin: ReceiptClaims)
+//!   verify-receipt                                               (stdin: {receipt,trusted_gateways})
 //!
 //! The point: anyone can produce their OWN signed vectors and check them against either
 //! implementation (this CLI, or echo-authority-wasm in the browser). Two implementations,
 //! one verdict — provable from your own terminal.
 
 use echo_authority_core::{
-    canonical_authority, canonical_invocation, check_attenuation, evaluate_json, AuthorityObject,
-    Invocation,
+    canonical_authority, canonical_invocation, check_attenuation, evaluate_json, sign_receipt,
+    verify_signed_receipt, AuthorityObject, Invocation, ReceiptClaims, SignedReceipt,
 };
 use ed25519_dalek::{Signer, SigningKey};
+use rand_core::OsRng;
+use std::collections::BTreeMap;
 use std::io::Read;
 
 fn b64(bytes: &[u8]) -> String {
     const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         out.push(A[(b[0] >> 2) as usize] as char);
         out.push(A[(((b[0] & 0x03) << 4) | (b[1] >> 4)) as usize] as char);
-        out.push(if chunk.len() > 1 { A[(((b[1] & 0x0f) << 2) | (b[2] >> 6)) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { A[(b[2] & 0x3f) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            A[(((b[1] & 0x0f) << 2) | (b[2] >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            A[(b[2] & 0x3f) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -64,7 +80,10 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 fn key_from_seed(seed_hex: &str) -> Result<SigningKey, String> {
     let bytes = hex_decode(seed_hex).ok_or("seed is not valid hex")?;
     if bytes.len() != 32 {
-        return Err(format!("seed must be 32 bytes (64 hex chars), got {}", bytes.len()));
+        return Err(format!(
+            "seed must be 32 bytes (64 hex chars), got {}",
+            bytes.len()
+        ));
     }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
@@ -96,26 +115,9 @@ fn main() {
 
     match cmd {
         "keygen" => {
-            // A deterministic seed derived from process entropy substitute: since we avoid the
-            // OS RNG for portability, accept an optional --from <hex> to expand, else use a
-            // time-mixed seed. Auditors who need reproducibility pass --from.
-            let seed = if let Some(from) = flag(&args, "--from") {
-                hex_decode(from).unwrap_or_else(|| die("--from is not valid hex")).into_iter().cycle().take(32).collect::<Vec<u8>>()
-            } else {
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0);
-                let mut s = [0u8; 32];
-                let n = nanos.to_le_bytes();
-                for (i, b) in s.iter_mut().enumerate() {
-                    *b = n[i % n.len()] ^ (i as u8).wrapping_mul(31).wrapping_add(0x5b);
-                }
-                s.to_vec()
-            };
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&seed[..32]);
-            let k = SigningKey::from_bytes(&arr);
+            let mut csprng = OsRng;
+            let k = SigningKey::generate(&mut csprng);
+            let arr = k.to_bytes();
             println!(
                 "{{\"seed_hex\":\"{}\",\"public_b64\":\"{}\"}}",
                 hex_encode(&arr),
@@ -172,18 +174,42 @@ fn main() {
             std::process::exit(if r.ok { 0 } else { 1 });
         }
 
+        "sign-receipt" => {
+            let seed = flag(&args, "--seed").unwrap_or_else(|| die("sign-receipt needs --seed <hex>"));
+            let gateway = flag(&args, "--gateway").unwrap_or_else(|| die("sign-receipt needs --gateway <id>"));
+            let key = key_from_seed(seed).unwrap_or_else(|e| die(&e));
+            let claims: ReceiptClaims = serde_json::from_str(&read_stdin())
+                .unwrap_or_else(|e| die(&format!("could not parse receipt claims: {e}")));
+            println!("{}", serde_json::to_string(&sign_receipt(claims, gateway, &key)).unwrap());
+        }
+
+        "verify-receipt" => {
+            #[derive(serde::Deserialize)]
+            struct ReceiptInput {
+                receipt: SignedReceipt,
+                trusted_gateways: BTreeMap<String, String>,
+            }
+            let input: ReceiptInput = serde_json::from_str(&read_stdin())
+                .unwrap_or_else(|e| die(&format!("could not parse receipt verification input: {e}")));
+            let valid = verify_signed_receipt(&input.receipt, &input.trusted_gateways);
+            println!("{{\"valid\":{valid}}}");
+            std::process::exit(if valid { 0 } else { 1 });
+        }
+
         "" | "help" | "-h" | "--help" => {
             eprintln!(
                 "echo-authority-cli — mint, invoke, verify, attenuate Authority Objects\n\n\
                  USAGE\n\
-                 \x20 echo-authority-cli keygen [--from <hex>]\n\
+                 \x20 echo-authority-cli keygen\n\
                  \x20 echo-authority-cli mint     --seed <hex>   < authority-fields.json\n\
                  \x20 echo-authority-cli invoke   --seed <hex>   < invocation-fields.json\n\
                  \x20 echo-authority-cli verify                  < request.json     (exit 0=ALLOW 1=DENY)\n\
-                 \x20 echo-authority-cli attenuate                < child-parent.json (exit 0=subset 1=not)\n"
+                 \x20 echo-authority-cli attenuate                < child-parent.json (exit 0=subset 1=not)\n\
+                 \x20 echo-authority-cli sign-receipt --seed <hex> --gateway <id> < claims.json\n\
+                 \x20 echo-authority-cli verify-receipt           < receipt-input.json\n"
             );
         }
 
-        other => die(&format!("unknown subcommand '{other}' (try: keygen, mint, invoke, verify, attenuate)")),
+        other => die(&format!("unknown subcommand '{other}' (try: keygen, mint, invoke, verify, attenuate, sign-receipt, verify-receipt)")),
     }
 }

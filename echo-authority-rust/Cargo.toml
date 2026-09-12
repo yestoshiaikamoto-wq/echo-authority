@@ -1,9 +1,9 @@
 [package]
 name = "echo-authority-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.74"
-description = "A reference implementation of the Echo Authority Protocol, Draft 0.1 — deterministic Border Control + attenuation."
+description = "A hardened reference implementation of the Echo Authority Protocol — deterministic authorization, attenuation, and signed receipts."
 license = "MIT OR Apache-2.0"
 authors = ["Money Musk <echo@moneymusk.space>"]
 repository = "https://github.com/yestoshiaikamoto-wq/echo-authority"
@@ -34,8 +34,9 @@ path = "src/bin/echo-authority-cli.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-ed25519-dalek = "2"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 hex = "0.4"
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
 # ed25519-dalek's Signer trait is used directly in tests; no extra deps needed.

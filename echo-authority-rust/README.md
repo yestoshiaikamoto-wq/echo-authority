@@ -1,92 +1,33 @@
-# echo-authority-core
+# echo-authority-core 0.2
 
-A **second, independent implementation** of the Echo Authority Protocol, Draft 0.1 — written in
-Rust, with no shared code with the TypeScript reference at `/protocol`.
+Hardened reference implementation of the Echo Authority Protocol.
 
-Its entire reason to exist: prove the protocol is a *shared language*, not one company's server.
-Given the same Authority Object, the same Invocation, and the same verifier state, this Rust code
-returns the **identical verdict** as the TypeScript engine. If two independent implementations
-agree on every conformance vector, the standard is real.
+The verifier accepts a privileged invocation only when:
 
-## What's here
+1. the issuer key matches a verifier-controlled trust registry;
+2. the Authority Object has a valid issuer signature;
+3. the invocation key matches the subject key bound into that grant;
+4. the invocation signature is valid;
+5. its authority id equals the hash of the signed grant;
+6. capability, resource, amount, currency, time, use, audience, nonce, revocation,
+   offline, and human-confirmation constraints all pass.
 
-| File | What it is |
-|------|-----------|
-| `src/lib.rs` | The core: types, canonical serialization, the shared `evaluate_json` entry point, the deterministic `border_check`, and the attenuation-only `check_attenuation`. |
-| `src/bin/echo-border-control.rs` | The reference enforcement proxy — pipe a request as JSON, get a verdict. Exit `0` on ALLOW, `1` on DENY. |
-| `src/bin/echo-authority-cli.rs` | The developer + auditor tool — `keygen`, `mint`, `invoke`, `verify`, `attenuate`. Produce your own signed vectors and check them against any implementation. |
-| `src/bin/dump-vectors.rs` | Emits genuinely-signed fixtures, consumed by the browser WASM demo at `/protocol`. |
-| `tests/conformance.rs` | The hostile suite — 18 border vectors + attenuation + resource-subset, each asserting an exact reason code. |
-
-A sibling crate, `../echo-authority-wasm`, compiles this same core to `wasm32-unknown-unknown`
-so the identical verifier runs in the browser on `/protocol` — two independent runtimes, one verdict.
-
-## Run it
+Money is represented in integer minor units. Signed objects use deterministic,
+length-prefixed encodings. The protocol's forbidden capability names are enforced exactly.
 
 ```sh
-cargo test          # 18 conformance vectors + 4 attenuation tests = 22 passing
-echo '{ "authority": {...}, "invocation": {...}, "state": {...} }' | ./target/release/echo-border-control
+cargo test --all-targets
+cargo run --bin echo-authority-cli -- keygen
 ```
 
-### Mint, sign, and verify your own — from the terminal
+`keygen` uses operating-system cryptographic randomness. Its `seed_hex` output is a private
+key and must be written directly to protected secret storage rather than logs or shell history.
 
-```sh
-cli=./target/release/echo-authority-cli
+Use `authorize_and_record` inside one database transaction or lock in a shared deployment.
+After an allow decision, sign the returned receipt claims with `sign_receipt`; consumers verify
+the signature and registered gateway key with `verify_signed_receipt`.
 
-# a key for the human issuer, and one for the acting agent
-iss=$($cli keygen | jq -r .seed_hex)
-sub=$($cli keygen | jq -r .seed_hex)
+Version 0.2 intentionally changes the Draft 0.1 wire format and is not backward compatible.
+The project remains a reference implementation pending independent security review.
 
-# the human mints + signs a bounded grant
-auth=$(echo '{ ...authority fields... }' | $cli mint   --seed "$iss")
-
-# the agent signs an invocation it wants to run under that grant
-inv=$(echo  '{ ...invocation fields... }' | $cli invoke --seed "$sub")
-
-# the border decides — exit 0 = ALLOW, exit 1 = DENY
-echo "{\"authority\":$auth,\"invocation\":$inv,\"state\":{...}}" | $cli verify
-
-# prove a delegated child never widens its parent — exit 0 = subset, 1 = not
-echo '{"child":{...},"parent":{...}}' | $cli attenuate
-```
-
-Tamper with `amount` after `invoke` signs it and `verify` returns `BAD_INVOCATION_SIGNATURE` —
-the signature was over the honest value, and the math notices.
-
-## The verifier is deliberately boring
-
-No model. No heuristics. No network. Twelve gates, in a fixed order, each returning the exact
-reason it failed:
-
-1. both signatures verify
-2. subject matches
-3. capability matches
-4. resource is within the grant
-5. value respects currency + per-action + total caps
-6. inside the time window
-7. uses budget remains
-8. audience binds to this gateway
-9. nonce is fresh (no replay)
-10. not revoked, and revocation is fresh enough (offline changes the risk, never the rule)
-11. capability is not in the never-grantable set
-12. human confirmation present when the grant demands it
-
-Only if all twelve pass does it ALLOW and mint an opaque receipt head — proof, never data.
-
-## Attenuation
-
-`check_attenuation(child, parent)` proves a delegated grant is a strict subset of its parent:
-same capability, resource within, caps `≤`, expiry `≤`, uses `≤`, depth strictly less. A child
-that widens *anything* cannot form. Power can only ever narrow as it flows down.
-
-## The one sentence
-
-> AI can propose anything. It can only execute what a human has cryptographically authorized.
-
-This crate is the part that says *no*.
-
----
-
-Draft 0.1. The protocol belongs to everyone — fork it, audit it, break it, and open an issue when
-you find a vector where two implementations disagree. That disagreement is the only bug that
-matters.
+Licensed under MIT or Apache-2.0.

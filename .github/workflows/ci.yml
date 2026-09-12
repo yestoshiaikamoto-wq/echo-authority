@@ -1,0 +1,30 @@
+name: Security CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Formatting
+        run: cargo fmt --manifest-path echo-authority-rust/Cargo.toml --all -- --check
+      - name: Clippy
+        run: cargo clippy --manifest-path echo-authority-rust/Cargo.toml --all-targets -- -D warnings
+      - name: Native tests
+        run: cargo test --manifest-path echo-authority-rust/Cargo.toml --all-targets
+      - name: WebAssembly build
+        run: cargo check --manifest-path echo-authority-wasm/Cargo.toml --target wasm32-unknown-unknown
+      - name: Generate browser vectors
+        run: cargo run --quiet --manifest-path echo-authority-rust/Cargo.toml --bin dump-vectors > /tmp/echo-vectors.json
+      - name: Validate browser vectors
+        run: python3 -c 'import json; v=json.load(open("/tmp/echo-vectors.json")); assert len(v) >= 8; assert all("request" in x and "expect" in x for x in v)'

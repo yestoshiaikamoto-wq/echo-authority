@@ -97,10 +97,11 @@ dependencies = [
 
 [[package]]
 name = "echo-authority-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ed25519-dalek",
  "hex",
+ "rand_core",
  "serde",
  "serde_json",
  "sha2",
