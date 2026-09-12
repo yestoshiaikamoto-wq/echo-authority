@@ -256,7 +256,8 @@ fn stale_future_and_pregrant_invocations_are_rejected() {
 
 #[test]
 fn currency_resource_subject_capability_and_audience_are_bound() {
-    let cases: Vec<(fn(&mut Fixture), Reason)> = vec![
+    type Mutation = fn(&mut Fixture);
+    let cases: Vec<(Mutation, Reason)> = vec![
         (
             |f| f.invocation.currency = Some("USD".into()),
             Reason::CurrencyMismatch,
