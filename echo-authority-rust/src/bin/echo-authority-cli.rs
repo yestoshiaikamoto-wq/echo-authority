@@ -30,11 +30,23 @@ fn b64(bytes: &[u8]) -> String {
     const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         out.push(A[(b[0] >> 2) as usize] as char);
         out.push(A[(((b[0] & 0x03) << 4) | (b[1] >> 4)) as usize] as char);
-        out.push(if chunk.len() > 1 { A[(((b[1] & 0x0f) << 2) | (b[2] >> 6)) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { A[(b[2] & 0x3f) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            A[(((b[1] & 0x0f) << 2) | (b[2] >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            A[(b[2] & 0x3f) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -68,7 +80,10 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 fn key_from_seed(seed_hex: &str) -> Result<SigningKey, String> {
     let bytes = hex_decode(seed_hex).ok_or("seed is not valid hex")?;
     if bytes.len() != 32 {
-        return Err(format!("seed must be 32 bytes (64 hex chars), got {}", bytes.len()));
+        return Err(format!(
+            "seed must be 32 bytes (64 hex chars), got {}",
+            bytes.len()
+        ));
     }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
