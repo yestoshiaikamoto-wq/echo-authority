@@ -4,17 +4,18 @@
 
 > AI can propose anything. It can only execute what a human has cryptographically authorized.
 
-This repository is the Rust reference implementation of the [Echo Authority
-Protocol](https://moneymusk.space/protocol), Draft 0.1. It exists to prove one thing: the
-protocol is a *shared language*, not one company's server.
+This repository preserves the standalone Echo Authority **Draft 0.1** Rust reference
+and its native/WASM conformance vectors.
 
-There are two independent implementations of the verifier — a TypeScript engine that runs the
-live demos at [moneymusk.space/protocol](https://moneymusk.space/protocol), and the Rust code
-in this repo. They share no code. Given the same Authority Object, the same Invocation, and the
-same verifier state, they return the **identical verdict** on every conformance vector.
+**Compatibility status:** Money Musk at commit
+`59886a74e35cb0ecb7a555a8836a623f9e846840` has a TypeScript authority profile 0.2,
+an evolved embedded Rust verifier, and HAP-1/1 (implementation release 0.4.0).
+Those signed formats are distinct from this standalone draft. Matching the vectors
+here does not establish compatibility with current Money Musk or production safety.
+Do not reinterpret old signatures or use a legacy-verifier fallback on rejection.
 
-If two independent implementations agree, the standard is real. If they ever disagree, that
-disagreement is the only bug that matters — please open an issue.
+The CLI entropy fix leaves Draft 0.1 signing bytes, schemas, verdicts, and vectors
+unchanged. It does not implement the superseded protocol-v0.2 proposal from PR #1.
 
 ## Verify it yourself, in about thirty seconds
 
@@ -33,7 +34,8 @@ test result: ok. 22 passed; 0 failed
 Eighteen of those are hostile Border Control vectors — each bends exactly one thing about a
 well-formed request and asserts the precise reason code the verifier must return
 (`VALUE_LIMIT_EXCEEDED`, `NONCE_REPLAY`, `BAD_INVOCATION_SIGNATURE`, `REVOCATION_STALE`, and so
-on). The rest prove attenuation: a delegated grant that widens *anything* cannot form.
+on). The remaining conformance tests cover attenuation and resource containment.
+Additional CLI tests cover key generation and deterministic signing compatibility.
 
 You do not have to trust this README. Run the suite and break it.
 
@@ -41,7 +43,7 @@ You do not have to trust this README. Run the suite and break it.
 
 | Crate | What it is |
 |-------|-----------|
-| [`echo-authority-core`](./echo-authority-rust) | The verifier: types, canonical serialization, the deterministic `border_check`, attenuation-only delegation, plus three binaries — `echo-border-control` (enforcement proxy), `echo-authority-cli` (keygen / mint / invoke / verify / attenuate), and `dump-vectors` (signed fixtures). Zero dependencies, pure `std`. |
+| [`echo-authority-core`](./echo-authority-rust) | The verifier: types, canonical serialization, the deterministic `border_check`, attenuation-only delegation, plus three binaries — `echo-border-control` (enforcement proxy), `echo-authority-cli` (keygen / mint / invoke / verify / attenuate), and `dump-vectors` (signed fixtures). |
 | [`echo-authority-wasm`](./echo-authority-wasm) | The same core compiled to `wasm32-unknown-unknown` over a raw pointer ABI, so the identical verifier runs in a browser. Not a second implementation — a second runtime. |
 
 ## The three invariants

@@ -90,31 +90,38 @@ fn die(msg: &str) -> ! {
     std::process::exit(2);
 }
 
+/// Explicit --from values retain the legacy deterministic fixture behavior.
+/// Normal key generation must fail closed if the operating system has no entropy.
+fn keygen_seed(
+    from: Option<&str>,
+    fill: impl FnOnce(&mut [u8]) -> Result<(), getrandom::Error>,
+) -> Result<[u8; 32], String> {
+    let mut seed = [0u8; 32];
+    if let Some(from) = from {
+        let fixture = hex_decode(from).ok_or("--from is not valid hex")?;
+        if fixture.is_empty() {
+            return Err("--from must contain at least one byte".into());
+        }
+        for (out, byte) in seed.iter_mut().zip(fixture.iter().cycle()) {
+            *out = *byte;
+        }
+    } else {
+        fill(&mut seed).map_err(|_| "operating-system randomness unavailable".to_string())?;
+    }
+    Ok(seed)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
 
     match cmd {
         "keygen" => {
-            // A deterministic seed derived from process entropy substitute: since we avoid the
-            // OS RNG for portability, accept an optional --from <hex> to expand, else use a
-            // time-mixed seed. Auditors who need reproducibility pass --from.
-            let seed = if let Some(from) = flag(&args, "--from") {
-                hex_decode(from).unwrap_or_else(|| die("--from is not valid hex")).into_iter().cycle().take(32).collect::<Vec<u8>>()
-            } else {
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0);
-                let mut s = [0u8; 32];
-                let n = nanos.to_le_bytes();
-                for (i, b) in s.iter_mut().enumerate() {
-                    *b = n[i % n.len()] ^ (i as u8).wrapping_mul(31).wrapping_add(0x5b);
-                }
-                s.to_vec()
-            };
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&seed[..32]);
+            let from = flag(&args, "--from");
+            if args.iter().any(|arg| arg == "--from") && from.is_none() {
+                die("--from needs a hexadecimal fixture value");
+            }
+            let arr = keygen_seed(from, getrandom::getrandom).unwrap_or_else(|e| die(&e));
             let k = SigningKey::from_bytes(&arr);
             println!(
                 "{{\"seed_hex\":\"{}\",\"public_b64\":\"{}\"}}",
@@ -185,5 +192,30 @@ fn main() {
         }
 
         other => die(&format!("unknown subcommand '{other}' (try: keygen, mint, invoke, verify, attenuate)")),
+    }
+}
+
+#[cfg(test)]
+mod keygen_tests {
+    use super::keygen_seed;
+
+    #[test]
+    fn unavailable_entropy_never_returns_a_fallback_key() {
+        let result = keygen_seed(None, |buffer| {
+            buffer.fill(7);
+            Err(getrandom::Error::UNSUPPORTED)
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn explicit_fixtures_remain_deterministic_without_entropy() {
+        let seed = keygen_seed(Some("0709"), |_| panic!("fixture requested entropy")).unwrap();
+        assert_eq!(seed, [7, 9].repeat(16).as_slice());
+    }
+
+    #[test]
+    fn empty_fixture_is_rejected_without_panicking() {
+        assert!(keygen_seed(Some(""), |_| panic!("fixture requested entropy")).is_err());
     }
 }

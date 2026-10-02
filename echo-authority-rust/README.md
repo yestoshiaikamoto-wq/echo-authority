@@ -1,12 +1,9 @@
 # echo-authority-core
 
-A **second, independent implementation** of the Echo Authority Protocol, Draft 0.1 — written in
-Rust, with no shared code with the TypeScript reference at `/protocol`.
-
-Its entire reason to exist: prove the protocol is a *shared language*, not one company's server.
-Given the same Authority Object, the same Invocation, and the same verifier state, this Rust code
-returns the **identical verdict** as the TypeScript engine. If two independent implementations
-agree on every conformance vector, the standard is real.
+The standalone Echo Authority Protocol, Draft 0.1, written in Rust.
+The native and WASM builds share the verifier and its legacy vectors. They are not
+wire-compatible with current Money Musk's TypeScript profile 0.2, embedded Rust
+verifier, or HAP-1/1. See the repository's compatibility note before integrating.
 
 ## What's here
 
@@ -19,7 +16,7 @@ agree on every conformance vector, the standard is real.
 | `tests/conformance.rs` | The hostile suite — 18 border vectors + attenuation + resource-subset, each asserting an exact reason code. |
 
 A sibling crate, `../echo-authority-wasm`, compiles this same core to `wasm32-unknown-unknown`
-so the identical verifier runs in the browser on `/protocol` — two independent runtimes, one verdict.
+so the same standalone verifier can run in a browser.
 
 ## Run it
 
@@ -52,6 +49,18 @@ echo '{"child":{...},"parent":{...}}' | $cli attenuate
 
 Tamper with `amount` after `invoke` signs it and `verify` returns `BAD_INVOCATION_SIGNATURE` —
 the signature was over the honest value, and the math notices.
+
+### Key generation
+
+`keygen` draws all 32 seed bytes from the operating system through `getrandom`.
+An entropy error exits with code 2 and emits no key; there is no timestamp or other
+fallback. Output remains exactly `{ "seed_hex", "public_b64" }`.
+
+`keygen --from <hex>` is retained only for reproducible test fixtures. As before,
+nonempty decoded bytes repeat or truncate to 32 bytes. Such seeds are predictable
+and must not be used as real authority keys. Empty, invalid, and missing fixture
+values fail without emitting a key. The `mint` and `invoke` signing formats and
+the verification-only WASM code are unchanged.
 
 ## The verifier is deliberately boring
 
