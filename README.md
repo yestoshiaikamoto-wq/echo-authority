@@ -1,60 +1,100 @@
-# Echo Authority Protocol — hardened Rust reference
+# Echo Authority Protocol — Rust reference implementation
 
-Echo Authority Protocol is a human-rooted authorization layer for autonomous systems.
-An AI may propose an action; execution requires a bounded grant issued by a trusted human key.
+**A human-rooted authority layer for autonomous systems.**
 
-Version 0.2 is a security-breaking upgrade from Draft 0.1. It closes the weaknesses found in
-the first adversarial review:
+> AI can propose anything. It can only execute what a human has cryptographically authorized.
 
-- issuer names resolve to verifier-controlled public keys;
-- every grant binds the subject's public key;
-- every invocation carries the content-derived id of its signed grant;
-- signed encodings use length-prefixed fields;
-- money uses non-negative integer minor units;
-- the full delegation surface can only narrow;
-- authorization consumption has one explicit state transition;
-- receipts can be signed and verified against a registered gateway key;
-- CLI key generation uses operating-system cryptographic randomness;
-- protocol capability names and the implementation use the same vocabulary.
+This repository preserves the standalone Echo Authority **Draft 0.1** Rust reference
+and its native/WASM conformance vectors.
 
-## Verify it
+**Compatibility status:** Money Musk at commit
+`59886a74e35cb0ecb7a555a8836a623f9e846840` has a TypeScript authority profile 0.2,
+an evolved embedded Rust verifier, and HAP-1/1 (implementation release 0.4.0).
+Those signed formats are distinct from this standalone draft. Matching the vectors
+here does not establish compatibility with current Money Musk or production safety.
+Do not reinterpret old signatures or use a legacy-verifier fallback on rejection.
+
+The CLI entropy fix leaves Draft 0.1 signing bytes, schemas, verdicts, and vectors
+unchanged. It does not implement the superseded protocol-v0.2 proposal from PR #1.
+
+## Verify it yourself, in about thirty seconds
 
 ```sh
 git clone https://github.com/yestoshiaikamoto-wq/echo-authority.git
 cd echo-authority/echo-authority-rust
-cargo test --all-targets
+cargo test
 ```
 
-CI also runs formatting, Clippy with warnings denied, a native test build, the WebAssembly build,
-and JSON validation of the browser vectors.
+Expected:
 
-## Repository map
+```
+test result: ok. 22 passed; 0 failed
+```
 
-| Path | Purpose |
-|---|---|
-| `echo-authority-rust/src/lib.rs` | Deterministic verifier, state transition, attenuation, and signed receipts |
-| `echo-authority-rust/tests/conformance.rs` | Expected behavior plus adversarial regression tests |
-| `echo-authority-rust/src/bin/echo-authority-cli.rs` | Secure key generation, minting, invocation, verification, and receipt tools |
-| `echo-authority-rust/src/bin/dump-vectors.rs` | Deterministically signed browser fixtures |
-| `echo-authority-wasm` | The same verifier compiled for the browser |
+Eighteen of those are hostile Border Control vectors — each bends exactly one thing about a
+well-formed request and asserts the precise reason code the verifier must return
+(`VALUE_LIMIT_EXCEEDED`, `NONCE_REPLAY`, `BAD_INVOCATION_SIGNATURE`, `REVOCATION_STALE`, and so
+on). The remaining conformance tests cover attenuation and resource containment.
+Additional CLI tests cover key generation and deterministic signing compatibility.
 
-## Integration rules
+You do not have to trust this README. Run the suite and break it.
 
-`border_check` is a pure decision function. A real gateway must use `authorize_and_record` inside
-one database transaction or process-wide lock. This prevents two concurrent requests from using
-the same nonce, use budget, or remaining spend.
+## What's in here
 
-The verifier returns canonical receipt claims after an allow decision. The enforcing gateway
-must call `sign_receipt` with its registered key before presenting the receipt as evidence.
-Consumers verify it with `verify_signed_receipt` and a verifier-controlled gateway registry.
+| Crate | What it is |
+|-------|-----------|
+| [`echo-authority-core`](./echo-authority-rust) | The verifier: types, canonical serialization, the deterministic `border_check`, attenuation-only delegation, plus three binaries — `echo-border-control` (enforcement proxy), `echo-authority-cli` (keygen / mint / invoke / verify / attenuate), and `dump-vectors` (signed fixtures). |
+| [`echo-authority-wasm`](./echo-authority-wasm) | The same core compiled to `wasm32-unknown-unknown` over a raw pointer ABI, so the identical verifier runs in a browser. Not a second implementation — a second runtime. |
 
-Issuer and gateway registries are trust inputs. Never accept either registry from the same
-untrusted request being evaluated.
+## The three invariants
 
-## Security status
+Everything above rests on these. They are not guidelines; they are the spine.
 
-This remains a reference implementation until an independent security review and production
-deployment assessment are complete. See [SECURITY.md](SECURITY.md) for reporting and deployment
-guidance.
+1. **No Authority Object → no privileged action.**
+2. **No valid Invocation → no execution.**
+3. **No receipt → no *verifiable* claim of completion.**
 
-The code is dual licensed under MIT or Apache-2.0. Fork it, test it, and challenge every boundary.
+The third is deliberately narrow. A bank could transfer funds and crash before signing a
+receipt — the consequence still happened. We govern evidence, not reality.
+
+## The verifier is deliberately boring
+
+No model. No heuristics. No network. Twelve gates in a fixed order, each returning the exact
+reason it failed: signatures, subject, capability, resource, value caps, time window, uses
+budget, audience, nonce freshness, revocation freshness, the never-grantable set, and human
+confirmation. Only if all twelve pass does it allow the action and mint an opaque receipt head.
+
+Proof, never data. The receipt commits to *that something happened* without carrying *what*.
+
+## A standard, not a moat
+
+The protocol belongs to everyone. Money Musk implements it and demonstrates it; anyone may
+fork it, audit it, re-implement it, or ship a competing verifier. There is no registry to join,
+no key to request, no attribution required.
+
+Dual-licensed under [MIT](./echo-authority-rust/LICENSE-MIT) or
+[Apache-2.0](./echo-authority-rust/LICENSE-APACHE), at your option — the Rust convention, chosen
+so the licensing is never the reason someone can't adopt it.
+
+## What is not yet proven
+
+An implementation that only advertised its wins would be marketing. The honest gaps, kept
+current at [moneymusk.space/verify](https://moneymusk.space/verify):
+
+- **No third-party security audit.** The vectors are ours. Adversarial review by people with no
+  stake in the result is the thing that would make this trustworthy, and it hasn't happened.
+- **No mapping onto W3C DIDs, Verifiable Credentials, or KERI.** Today, adopting this means
+  adopting our vocabulary rather than slotting into standards you already run. This is the most
+  important gap we know of.
+- **Signatures in the test fixtures are modeled as opaque strings** in some vectors so the suite
+  stays dependency-free and offline; the CLI and the WASM fixtures use real Ed25519.
+
+## Learn more
+
+- [The protocol, with a live verifier](https://moneymusk.space/protocol) — run vectors in your browser
+- [The Human Authority Model](https://moneymusk.space/model) — where authority comes from, and why it never begins with a machine
+- [Verify it yourself](https://moneymusk.space/verify) — every claim we make, and the exact command that would falsify it
+
+---
+
+Draft 0.1. Fork it, audit it, break it.

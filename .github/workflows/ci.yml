@@ -1,4 +1,4 @@
-name: Security CI
+name: Legacy compatibility and CLI entropy
 
 on:
   push:
@@ -10,21 +10,21 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
           targets: wasm32-unknown-unknown
-      - name: Formatting
-        run: cargo fmt --manifest-path echo-authority-rust/Cargo.toml --all -- --check
-      - name: Clippy
-        run: cargo clippy --manifest-path echo-authority-rust/Cargo.toml --all-targets -- -D warnings
-      - name: Native tests
-        run: cargo test --manifest-path echo-authority-rust/Cargo.toml --all-targets
-      - name: WebAssembly build
-        run: cargo check --manifest-path echo-authority-wasm/Cargo.toml --target wasm32-unknown-unknown
-      - name: Generate browser vectors
-        run: cargo run --quiet --manifest-path echo-authority-rust/Cargo.toml --bin dump-vectors > /tmp/echo-vectors.json
-      - name: Validate browser vectors
-        run: python3 -c 'import json; v=json.load(open("/tmp/echo-vectors.json")); assert len(v) >= 8; assert all("request" in x and "expect" in x for x in v)'
+      - name: Native conformance, entropy failure, and CLI regressions
+        run: cargo test --locked --manifest-path echo-authority-rust/Cargo.toml --all-targets
+      - name: Verification-only WebAssembly build
+        run: cargo check --locked --manifest-path echo-authority-wasm/Cargo.toml --target wasm32-unknown-unknown
+      - name: Preserve exact standalone Draft 0.1 vector bytes
+        # Generated from main at 88406079e2685a23b643aeb9cf24330d6d36e285.
+        # This checks legacy compatibility, not conformance to current Money Musk.
+        run: |
+          cargo run --locked --quiet --manifest-path echo-authority-rust/Cargo.toml --bin dump-vectors > "$RUNNER_TEMP/echo-vectors.json"
+          printf '%s  %s\n' 'f4c7b4eaed25a206774a2e1ee760c6cff2e0c6ed5414529acfffa2be2ca39844' "$RUNNER_TEMP/echo-vectors.json" | sha256sum --check

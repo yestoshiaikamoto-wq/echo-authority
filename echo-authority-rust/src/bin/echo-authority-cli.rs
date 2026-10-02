@@ -10,43 +10,27 @@
 //!   invoke     --seed <hex>      -> a signed Invocation                      (stdin: invocation fields JSON)
 //!   verify                       -> {"decision","reason","receipt"} exit 0/1 (stdin: {authority,invocation,state})
 //!   attenuate                    -> {"ok","violations"}          exit 0/1    (stdin: {child,parent})
-//!   sign-receipt --seed <hex> --gateway <id>                    (stdin: ReceiptClaims)
-//!   verify-receipt                                               (stdin: {receipt,trusted_gateways})
 //!
 //! The point: anyone can produce their OWN signed vectors and check them against either
 //! implementation (this CLI, or echo-authority-wasm in the browser). Two implementations,
 //! one verdict — provable from your own terminal.
 
 use echo_authority_core::{
-    canonical_authority, canonical_invocation, check_attenuation, evaluate_json, sign_receipt,
-    verify_signed_receipt, AuthorityObject, Invocation, ReceiptClaims, SignedReceipt,
+    canonical_authority, canonical_invocation, check_attenuation, evaluate_json, AuthorityObject,
+    Invocation,
 };
 use ed25519_dalek::{Signer, SigningKey};
-use rand_core::OsRng;
-use std::collections::BTreeMap;
 use std::io::Read;
 
 fn b64(bytes: &[u8]) -> String {
     const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
         out.push(A[(b[0] >> 2) as usize] as char);
         out.push(A[(((b[0] & 0x03) << 4) | (b[1] >> 4)) as usize] as char);
-        out.push(if chunk.len() > 1 {
-            A[(((b[1] & 0x0f) << 2) | (b[2] >> 6)) as usize] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            A[(b[2] & 0x3f) as usize] as char
-        } else {
-            '='
-        });
+        out.push(if chunk.len() > 1 { A[(((b[1] & 0x0f) << 2) | (b[2] >> 6)) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { A[(b[2] & 0x3f) as usize] as char } else { '=' });
     }
     out
 }
@@ -80,10 +64,7 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 fn key_from_seed(seed_hex: &str) -> Result<SigningKey, String> {
     let bytes = hex_decode(seed_hex).ok_or("seed is not valid hex")?;
     if bytes.len() != 32 {
-        return Err(format!(
-            "seed must be 32 bytes (64 hex chars), got {}",
-            bytes.len()
-        ));
+        return Err(format!("seed must be 32 bytes (64 hex chars), got {}", bytes.len()));
     }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
@@ -109,15 +90,39 @@ fn die(msg: &str) -> ! {
     std::process::exit(2);
 }
 
+/// Explicit --from values retain the legacy deterministic fixture behavior.
+/// Normal key generation must fail closed if the operating system has no entropy.
+fn keygen_seed(
+    from: Option<&str>,
+    fill: impl FnOnce(&mut [u8]) -> Result<(), getrandom::Error>,
+) -> Result<[u8; 32], String> {
+    let mut seed = [0u8; 32];
+    if let Some(from) = from {
+        let fixture = hex_decode(from).ok_or("--from is not valid hex")?;
+        if fixture.is_empty() {
+            return Err("--from must contain at least one byte".into());
+        }
+        for (out, byte) in seed.iter_mut().zip(fixture.iter().cycle()) {
+            *out = *byte;
+        }
+    } else {
+        fill(&mut seed).map_err(|_| "operating-system randomness unavailable".to_string())?;
+    }
+    Ok(seed)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
 
     match cmd {
         "keygen" => {
-            let mut csprng = OsRng;
-            let k = SigningKey::generate(&mut csprng);
-            let arr = k.to_bytes();
+            let from = flag(&args, "--from");
+            if args.iter().any(|arg| arg == "--from") && from.is_none() {
+                die("--from needs a hexadecimal fixture value");
+            }
+            let arr = keygen_seed(from, getrandom::getrandom).unwrap_or_else(|e| die(&e));
+            let k = SigningKey::from_bytes(&arr);
             println!(
                 "{{\"seed_hex\":\"{}\",\"public_b64\":\"{}\"}}",
                 hex_encode(&arr),
@@ -174,42 +179,43 @@ fn main() {
             std::process::exit(if r.ok { 0 } else { 1 });
         }
 
-        "sign-receipt" => {
-            let seed = flag(&args, "--seed").unwrap_or_else(|| die("sign-receipt needs --seed <hex>"));
-            let gateway = flag(&args, "--gateway").unwrap_or_else(|| die("sign-receipt needs --gateway <id>"));
-            let key = key_from_seed(seed).unwrap_or_else(|e| die(&e));
-            let claims: ReceiptClaims = serde_json::from_str(&read_stdin())
-                .unwrap_or_else(|e| die(&format!("could not parse receipt claims: {e}")));
-            println!("{}", serde_json::to_string(&sign_receipt(claims, gateway, &key)).unwrap());
-        }
-
-        "verify-receipt" => {
-            #[derive(serde::Deserialize)]
-            struct ReceiptInput {
-                receipt: SignedReceipt,
-                trusted_gateways: BTreeMap<String, String>,
-            }
-            let input: ReceiptInput = serde_json::from_str(&read_stdin())
-                .unwrap_or_else(|e| die(&format!("could not parse receipt verification input: {e}")));
-            let valid = verify_signed_receipt(&input.receipt, &input.trusted_gateways);
-            println!("{{\"valid\":{valid}}}");
-            std::process::exit(if valid { 0 } else { 1 });
-        }
-
         "" | "help" | "-h" | "--help" => {
             eprintln!(
                 "echo-authority-cli — mint, invoke, verify, attenuate Authority Objects\n\n\
                  USAGE\n\
-                 \x20 echo-authority-cli keygen\n\
+                 \x20 echo-authority-cli keygen [--from <hex>]\n\
                  \x20 echo-authority-cli mint     --seed <hex>   < authority-fields.json\n\
                  \x20 echo-authority-cli invoke   --seed <hex>   < invocation-fields.json\n\
                  \x20 echo-authority-cli verify                  < request.json     (exit 0=ALLOW 1=DENY)\n\
-                 \x20 echo-authority-cli attenuate                < child-parent.json (exit 0=subset 1=not)\n\
-                 \x20 echo-authority-cli sign-receipt --seed <hex> --gateway <id> < claims.json\n\
-                 \x20 echo-authority-cli verify-receipt           < receipt-input.json\n"
+                 \x20 echo-authority-cli attenuate                < child-parent.json (exit 0=subset 1=not)\n"
             );
         }
 
-        other => die(&format!("unknown subcommand '{other}' (try: keygen, mint, invoke, verify, attenuate, sign-receipt, verify-receipt)")),
+        other => die(&format!("unknown subcommand '{other}' (try: keygen, mint, invoke, verify, attenuate)")),
+    }
+}
+
+#[cfg(test)]
+mod keygen_tests {
+    use super::keygen_seed;
+
+    #[test]
+    fn unavailable_entropy_never_returns_a_fallback_key() {
+        let result = keygen_seed(None, |buffer| {
+            buffer.fill(7);
+            Err(getrandom::Error::UNSUPPORTED)
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn explicit_fixtures_remain_deterministic_without_entropy() {
+        let seed = keygen_seed(Some("0709"), |_| panic!("fixture requested entropy")).unwrap();
+        assert_eq!(seed, [7, 9].repeat(16).as_slice());
+    }
+
+    #[test]
+    fn empty_fixture_is_rejected_without_panicking() {
+        assert!(keygen_seed(Some(""), |_| panic!("fixture requested entropy")).is_err());
     }
 }
