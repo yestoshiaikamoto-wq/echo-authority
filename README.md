@@ -86,8 +86,39 @@ current at [moneymusk.space/verify](https://moneymusk.space/verify):
 - **No mapping onto W3C DIDs, Verifiable Credentials, or KERI.** Today, adopting this means
   adopting our vocabulary rather than slotting into standards you already run. This is the most
   important gap we know of.
-- **Signatures in the test fixtures are modeled as opaque strings** in some vectors so the suite
-  stays dependency-free and offline; the CLI and the WASM fixtures use real Ed25519.
+- **Six known gaps in Draft 0.1**, each with a test that fails today. See below.
+
+## Known gaps in Draft 0.1
+
+Adversarial testing of this draft found the gaps below. Closing any of them changes the
+signed bytes or the request shape, so they are not fixed in the 0.1 line. Each is written
+down as a test in [`tests/adversarial.rs`](./echo-authority-rust/tests/adversarial.rs) that
+is marked `#[ignore]` and **fails** when run:
+
+```sh
+cd echo-authority-rust
+cargo test --test adversarial -- --ignored
+```
+
+| Gap | What an attacker can do | What closing it needs |
+|-----|-------------------------|-----------------------|
+| No trust anchor | Sign a grant and a request with keys nobody registered; the verifier checks each signature against the key carried in the same message | Verifier-held trusted issuer keys; the grant commits to the subject's key |
+| Budget keyed by a chosen id | Rename `authority_id` on a used-up grant and start a fresh budget | Derive the counter key from the signed grant |
+| Unsigned human confirmation | Flip `human_confirmed` to `true` after signing | The human's signature over the exact invocation |
+| Ambiguous signed bytes | Build two different grants that produce the same newline-joined preimage | Length-prefixed fields or canonical JSON |
+| Floating-point amounts | Rust and JavaScript print large and tiny values differently, so the two sign different text | Integer minor units |
+| No request freshness | Present an old signed invocation; `created` is never compared with the clock | A maximum invocation age |
+
+Do not deploy Draft 0.1 as an enforcement boundary. An embedder that does must, at minimum,
+pin issuer keys outside the request, own all counter and nonce state itself, and obtain human
+confirmation through a channel the agent cannot write to.
+
+Release 0.1.1 fixes what could be fixed without changing a single signed byte or reason code:
+negative, NaN and infinite amounts are refused; a target resource must be literal and spelled
+one way (no wildcard, no empty, `.` or `..` segment); a delegated grant may not drop human
+confirmation, loosen revocation freshness, start earlier than its parent or re-enable
+delegation; an unknown or missing field is a malformed request instead of a silent default;
+signatures are verified strictly. The pinned vector digest is unchanged.
 
 ## Learn more
 
