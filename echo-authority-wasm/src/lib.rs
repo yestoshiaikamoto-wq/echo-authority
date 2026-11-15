@@ -15,13 +15,11 @@ use echo_authority_core::evaluate_json;
 
 // wasm32-unknown-unknown has no OS entropy. Border Control never asks for randomness on the
 // verify path, but getrandom must link, so we register a stub. If it is ever reached, that is
-// a bug, not a silent weak key — verification does not consume it.
+// a bug — so the stub returns an error rather than predictable bytes.
 getrandom::register_custom_getrandom!(unused_entropy);
-fn unused_entropy(buf: &mut [u8]) -> Result<(), getrandom::Error> {
-    for b in buf.iter_mut() {
-        *b = 0;
-    }
-    Ok(())
+fn unused_entropy(_buf: &mut [u8]) -> Result<(), getrandom::Error> {
+    // Fail closed: if anything ever asks for randomness here, it must not receive zeros.
+    Err(getrandom::Error::UNSUPPORTED)
 }
 
 /// Reserve `len` bytes and hand the host a pointer into linear memory.

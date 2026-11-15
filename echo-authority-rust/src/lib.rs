@@ -66,6 +66,7 @@ impl BorderResult {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Scope {
     pub currency: Option<String>,
     #[serde(default)]
@@ -75,6 +76,7 @@ pub struct Scope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Constraints {
     /// Unix seconds. Action is invalid before this instant.
     pub not_before: i64,
@@ -82,11 +84,12 @@ pub struct Constraints {
     pub expires: i64,
     pub max_uses: u64,
     /// If true, an interactive human confirmation MUST accompany the invocation.
-    #[serde(default)]
+    /// Required on the wire: a grant that omits or misspells it is malformed, not "false".
     pub require_human_confirmation: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Delegation {
     #[serde(default)]
     pub allowed: bool,
@@ -95,6 +98,7 @@ pub struct Delegation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Revocation {
     /// e.g. "revocation-list". A revoked id in verifier state ends the grant.
     pub method: String,
@@ -104,6 +108,7 @@ pub struct Revocation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthorityObject {
     pub issuer: String,
     pub subject: String,
@@ -120,6 +125,7 @@ pub struct AuthorityObject {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Invocation {
     pub authority_id: String,
     pub invocation_id: String,
@@ -216,7 +222,7 @@ pub fn canonical_invocation(i: &Invocation) -> String {
 }
 
 fn verify_sig(msg: &str, pub_b64: &str, sig_b64: &str) -> bool {
-    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use ed25519_dalek::{Signature, VerifyingKey};
     let pub_bytes = match base64_decode(pub_b64) {
         Some(b) if b.len() == 32 => b,
         _ => return false,
@@ -234,7 +240,8 @@ fn verify_sig(msg: &str, pub_b64: &str, sig_b64: &str) -> bool {
     let mut sg = [0u8; 64];
     sg.copy_from_slice(&sig_bytes);
     let sig = Signature::from_bytes(&sg);
-    vk.verify(msg.as_bytes(), &sig).is_ok()
+    // Strict: rejects small-order keys and non-canonical signatures.
+    vk.verify_strict(msg.as_bytes(), &sig).is_ok()
 }
 
 /// Opaque commitment written on ALLOW. Commits the exercised terms; carries no data.
@@ -257,7 +264,20 @@ fn receipt_head(a: &AuthorityObject, i: &Invocation) -> String {
 // glob prefix (`vault/*`) that covers child, or parent is a path prefix of child.
 // ---------------------------------------------------------------------------
 
+/// A concrete resource (the thing an invocation targets) is literal and has exactly one
+/// spelling: no wildcard, and no empty, `.` or `..` path segment. A leading, trailing or
+/// doubled slash, or a relative segment, names something an embedder may later normalise
+/// into a different resource from the one compared here.
+pub fn resource_is_concrete(resource: &str) -> bool {
+    !resource.is_empty()
+        && !resource.contains('*')
+        && !resource.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..")
+}
+
 pub fn resource_within(child: &str, parent: &str) -> bool {
+    if child.split('/').any(|seg| seg == "." || seg == "..") {
+        return false;
+    }
     if child == parent {
         return true;
     }
@@ -300,12 +320,27 @@ pub fn border_check(
         return BorderResult::deny(Reason::CapabilityMismatch);
     }
 
-    // 4. The target resource must be within the granted resource.
+    // 4. The target resource must be concrete and within the granted resource.
+    //    The reason vocabulary of Draft 0.1 is unchanged: an unparseable target is a mismatch.
+    if !resource_is_concrete(&invocation.resource) {
+        return BorderResult::deny(Reason::ResourceMismatch);
+    }
     if !resource_within(&invocation.resource, &authority.resource) {
         return BorderResult::deny(Reason::ResourceMismatch);
     }
 
     // 5. Value must respect currency and both caps (per-action and running total).
+    //    Amounts and caps must be finite and non-negative: a negative or NaN amount would
+    //    otherwise skip every value gate and could reduce the embedder's running total.
+    let finite_non_negative = |v: f64| v.is_finite() && v >= 0.0;
+    if !finite_non_negative(invocation.amount)
+        || !finite_non_negative(authority.scope.max_per_action)
+        || !finite_non_negative(authority.scope.max_total)
+    {
+        // Draft 0.1 has no dedicated reason code; a value outside the representable
+        // range of the grant is refused as exceeding its limit.
+        return BorderResult::deny(Reason::ValueLimitExceeded);
+    }
     if invocation.amount > 0.0 {
         if authority.scope.currency != invocation.currency {
             return BorderResult::deny(Reason::CurrencyMismatch);
@@ -314,6 +349,9 @@ pub fn border_check(
             return BorderResult::deny(Reason::ValueLimitExceeded);
         }
         let already = *state.spent_total.get(&invocation.authority_id).unwrap_or(&0.0);
+        if !finite_non_negative(already) {
+            return BorderResult::deny(Reason::TotalLimitExceeded);
+        }
         if already + invocation.amount > authority.scope.max_total {
             return BorderResult::deny(Reason::TotalLimitExceeded);
         }
@@ -403,6 +441,18 @@ pub fn check_attenuation(child: &AuthorityObject, parent: &AuthorityObject) -> A
     if child.scope.currency != parent.scope.currency {
         v.push("scope.currency differs from parent".into());
     }
+    if child.constraints.not_before < parent.constraints.not_before {
+        v.push("child not_before is earlier than parent".into());
+    }
+    if parent.constraints.require_human_confirmation && !child.constraints.require_human_confirmation {
+        v.push("child drops the parent's human-confirmation requirement".into());
+    }
+    if child.revocation.freshness_required_sec > parent.revocation.freshness_required_sec {
+        v.push("child loosens revocation freshness".into());
+    }
+    if child.delegation.allowed && !parent.delegation.allowed {
+        v.push("child permits delegation the parent does not".into());
+    }
     if child.constraints.expires > parent.constraints.expires {
         v.push("child expiry is later than parent".into());
     }
@@ -483,6 +533,7 @@ pub fn reason_str(r: Reason) -> &'static str {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StateWire {
     now: i64,
     audience: String,
@@ -503,6 +554,7 @@ struct StateWire {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RequestWire {
     authority: AuthorityObject,
     invocation: Invocation,

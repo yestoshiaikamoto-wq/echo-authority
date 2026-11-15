@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "echo-authority-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ed25519-dalek",
  "getrandom",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "echo-authority-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "echo-authority-core",
  "getrandom",
