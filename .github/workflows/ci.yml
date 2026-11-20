@@ -3,6 +3,7 @@ name: Legacy compatibility and CLI entropy
 on:
   push:
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -15,7 +16,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: wasm32-unknown-unknown
       - name: Native conformance, entropy failure, and CLI regressions

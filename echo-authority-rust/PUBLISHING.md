@@ -1,101 +1,74 @@
-# Publishing the Echo Authority reference implementation
+# Publishing Echo Authority
 
-Everything is prepared. These are the only steps that require **your** accounts — a GitHub
-repository and a crates.io login. Nothing here can be done from inside v0; run it locally
-after you download the project.
+Both crates use the manual `Publish to crates.io` workflow in
+`yestoshiaikamoto-wq/echo-authority`. A push or pull request runs CI. A manual
+run defaults to verification. Publishing requires an explicit selection of
+`publish` on the `main` branch.
 
-## 0. Repository URL — DONE
+## Configure the trusted publisher
 
-Both `Cargo.toml` files now point at the real repo:
+Before enabling this release path, the repository and crate owners must approve
+and apply the following settings.
 
-```
-repository = "https://github.com/yestoshiaikamoto-wq/echo-authority"
-homepage   = "https://moneymusk.space/protocol"
-```
+1. In GitHub **Settings → Environments**, create `crates-io`. Set deployment
+   branches and tags to **Selected branches and tags**, add the **Branch**
+   rule `main`, and leave the tag list empty.
+2. On crates.io, open **Settings → Trusted Publishing** for each existing crate,
+   `echo-authority-core` and `echo-authority-wasm`. Add a GitHub publisher to
+   each using these exact values.
 
-Nothing to change. Create the GitHub repo with the matching name — **`echo-authority`**,
-owner `yestoshiaikamoto-wq` — so the manifests and the repo agree.
+   | Field | Value |
+   | --- | --- |
+   | Repository owner | `yestoshiaikamoto-wq` |
+   | Repository | `echo-authority` |
+   | Workflow filename | `publish.yml` |
+   | Environment | `crates-io` |
 
-Suggested repo description:
+3. Review both entries against the workflow and check the GitHub environment's
+   branch rule. The release job exchanges its GitHub OIDC identity for a
+   short-lived credential using the Rust project's auth action.
 
-> A human-rooted authority protocol for autonomous systems. No authority, no privileged
-> action. Reference implementation in Rust — 22/22 conformance vectors.
+## Validate without uploading
 
-Create it **empty**: no README, no .gitignore, no license from the dropdown. The crates
-already carry their own `README.md`, `LICENSE-MIT`, and `LICENSE-APACHE`, and an
-auto-generated file would collide on your first push.
-
-## 1. Push to the public GitHub repo
-
-Push **only the two crate folders** — not the whole Money Musk website. This repo is the
-reference implementation of the protocol, so it should contain nothing a reviewer has to
-wade past. Build a clean folder first:
-
-```
-echo-authority/                  <- rename echo-authority-repo/ to this
-├── README.md                    <- already inside echo-authority-repo/
-├── echo-authority-rust/         <- copy in from the v0 project
-└── echo-authority-wasm/         <- copy in from the v0 project
-```
-
-After downloading the project ZIP from v0: rename the `echo-authority-repo` folder to
-`echo-authority` (it already holds the repo's front-page `README.md`), copy the two crate
-directories into it, then from inside it:
+From a clean checkout of the revision under review, install the
+`wasm32-unknown-unknown` target for stable Rust and run the same checks as CI
+from the repository root. These commands need no registry credential.
 
 ```sh
-git init
-git add .
-git commit -m "Echo Authority Protocol — Rust reference implementation (Draft 0.1)"
-git branch -M main
-git remote add origin https://github.com/yestoshiaikamoto-wq/echo-authority.git
-git push -u origin main
+cargo test --locked --manifest-path echo-authority-rust/Cargo.toml --all-targets
+cargo check --locked --manifest-path echo-authority-wasm/Cargo.toml --target wasm32-unknown-unknown
+(
+  set -eu
+  vectors=$(mktemp)
+  trap 'rm -f "$vectors"' EXIT
+  cargo run --locked --quiet --manifest-path echo-authority-rust/Cargo.toml --bin dump-vectors > "$vectors"
+  printf '%s  %s\n' 'f4c7b4eaed25a206774a2e1ee760c6cff2e0c6ed5414529acfffa2be2ca39844' "$vectors" | sha256sum --check
+)
 ```
 
-Each crate carries its own `.gitignore` with `/target`, so build artifacts can never be
-committed regardless of where the crates sit. Confirm with `git status` before committing:
-you should see roughly 17 files and **no** `target/` anywhere. If you see thousands, a `target/`
-folder came along — delete it and re-check.
+For packaging, run `cargo package --list --locked --manifest-path PATH`
+once for each manifest above. This lists the files that would ship.
 
-## 2. Dry-run the package (no account needed — do this first)
+After merge, a separately authorized manual run with `publish` unchecked
+can exercise the release workflow's verification path. Expect successful CI
+and a **skipped publish job**. This path never requests an OIDC token. A green
+result verifies the code and gates. Registry acceptance is established on an
+authorized release.
 
-```sh
-cd echo-authority-rust
-cargo publish --dry-run          # verifies metadata, builds, and packs the tarball
-cargo package --list             # shows exactly which files would be uploaded
-```
+## Release an approved revision
 
-Fix any warning it prints. A clean dry-run means the real publish will succeed.
+1. Review the commit on `main`, the package versions in both manifests, their
+   lockfiles, and the version of core required by WASM. Confirm both intended
+   versions are available to publish. Each crate version can be uploaded once.
+2. When the release is authorized, select **Actions → Publish to crates.io →
+   Run workflow**, choose `main`, and select `publish`. The workflow verifies
+   the dispatched commit, then publishes core, waits for the index, and publishes
+   WASM for `wasm32-unknown-unknown`.
+3. Confirm both versions on crates.io. If an upload fails partway through, check
+   which versions reached the registry before deciding on recovery.
+4. After the first successful trusted release of both crates, the owners may
+   separately approve **Trusted Publishing Only** on each crate. That setting
+   disables traditional API-token publishing for the crate. Review any legacy
+   secret or token separately before retiring it.
 
-## 3. Log in and publish — order matters
-
-`echo-authority-wasm` depends on `echo-authority-core`, so **core must be published first**;
-crates.io will not accept a crate whose path-dependency isn't already registered.
-
-```sh
-cargo login                      # paste the token from https://crates.io/settings/tokens
-
-cd echo-authority-rust
-cargo publish                    # publishes echo-authority-core 0.1.0
-
-# wait ~30s for the index to update, then:
-cd ../echo-authority-wasm
-cargo publish                    # publishes echo-authority-wasm 0.1.0
-```
-
-That's it. Both crates are now installable with `cargo add echo-authority-core` and the docs
-render automatically at `https://docs.rs/echo-authority-core`.
-
-## 4. Cutting future versions
-
-- Bump `version` in the crate's `Cargo.toml` (semver: breaking = `0.2.0`, additive = `0.1.1`).
-- If `core` changes, bump the `version = "..."` pin in `echo-authority-wasm`'s dependency too.
-- `cargo publish` is irreversible per version — you can `yank` a bad release but never re-upload
-  the same number. Dry-run first, always.
-
-## What's already done for you
-
-- `description`, `license = "MIT OR Apache-2.0"`, `LICENSE-MIT` + `LICENSE-APACHE` in both crates
-- `keywords`, `categories`, `readme`, `authors`, `rust-version`, `repository`, `homepage`
-- `exclude = ["target/"]` so build artifacts never ship
-- `echo-authority-wasm`'s core dependency carries both a `path` (local) and a `version` (crates.io)
-- `cargo test` → 22/22 green · `cargo build --release` clean · wasm build verified in-browser
+[crates.io Trusted Publishing](https://crates.io/docs/trusted-publishing)
