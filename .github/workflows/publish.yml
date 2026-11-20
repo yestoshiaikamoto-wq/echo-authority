@@ -1,52 +1,51 @@
 name: Publish to crates.io
 
-# Run this by hand from the Actions tab. Publishing is irreversible, so it is
-# never automatic.
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish both crates to crates.io after verification
+        type: boolean
+        default: false
 
-# The registry token is the only credential this job needs.
 permissions:
   contents: read
 
 jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
   publish:
+    needs: verify
+    if: inputs.publish && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      # Pinned to the same commit as ci.yml: a moved tag must not run beside the registry token.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: wasm32-unknown-unknown
 
-      # The gate: no green vectors, no publish. 18 conformance vectors plus 4
-      # attenuation tests (22), the CLI tests and the adversarial regressions. If any one of them
-      # disagrees with the spec, this job stops here and nothing is published.
-      - name: Run the conformance suite
-        run: cargo test --locked --manifest-path echo-authority-rust/Cargo.toml --all-targets
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
 
-      # The same gate ci.yml applies: publishing must never change Draft 0.1 signed bytes.
-      - name: Preserve exact standalone Draft 0.1 vector bytes
-        run: |
-          cargo run --locked --quiet --manifest-path echo-authority-rust/Cargo.toml --bin dump-vectors > "$RUNNER_TEMP/echo-vectors.json"
-          printf '%s  %s\n' 'f4c7b4eaed25a206774a2e1ee760c6cff2e0c6ed5414529acfffa2be2ca39844' "$RUNNER_TEMP/echo-vectors.json" | sha256sum --check
-
-      # Order matters. echo-authority-wasm depends on echo-authority-core by
-      # version, so core has to exist in the registry first.
+      # The WASM crate depends on the published version of core.
       - name: Publish echo-authority-core
         run: cargo publish --locked --manifest-path echo-authority-rust/Cargo.toml
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
       - name: Wait for the registry index to catch up
         run: sleep 45
 
-      # Verified against wasm32: the crate is a cdylib for the browser, so a
-      # host-target build check would not represent how it is actually used.
       - name: Publish echo-authority-wasm
         run: cargo publish --locked --manifest-path echo-authority-wasm/Cargo.toml --target wasm32-unknown-unknown
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
