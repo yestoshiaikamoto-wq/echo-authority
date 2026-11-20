@@ -12,7 +12,7 @@ documentation = "https://docs.rs/echo-authority-core"
 readme = "README.md"
 keywords = ["authority", "authorization", "capability", "agent", "ed25519"]
 categories = ["authentication", "cryptography", "command-line-utilities"]
-exclude = ["target/"]
+exclude = ["target/", "tests/adversarial.rs"]
 
 [lib]
 name = "echo_authority_core"
